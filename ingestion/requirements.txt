@@ -1,0 +1,7 @@
+pydantic-settings
+sqlalchemy
+asyncpg
+sentence_transformers
+pgvector
+httpx
+python-dotenv

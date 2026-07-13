@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sentence_transformers import SentenceTransformer
 
+from app.core.config import settings
 from app.core.db import Base, engine
 from app.core.models import Chunk, ChatMessage  # noqa: F401 - registran las tablas en Base.metadata
 from app.routers import chat
@@ -12,10 +13,11 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Load the model
-    # qwen3-Embedding-0.6B 1024 dimensions
+    # Debe ser el mismo modelo (y misma dimensión, 1024) que usa
+    # ingestion/run.py para embeder los chunks: si difieren, las
+    # queries y los chunks quedan en espacios vectoriales distintos.
     app.state.embedding_model = SentenceTransformer(
-        "Qwen/Qwen3-Embedding-0.6B",
+        settings.EMBEDDING_MODEL_NAME,
         trust_remote_code = True
     )
     print("Model loaded successfully")
