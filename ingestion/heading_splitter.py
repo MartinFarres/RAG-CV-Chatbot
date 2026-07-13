@@ -1,6 +1,14 @@
 import re
 
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+.*$", re.MULTILINE)
+_H1_RE = re.compile(r"^#[ \t]+(.+)$", re.MULTILINE)
+
+
+def extract_title(markdown: str) -> str | None:
+    """Devuelve el texto del primer heading de nivel 1 (# Título), o
+    None si no hay ninguno."""
+    match = _H1_RE.search(markdown)
+    return match.group(1).strip() if match else None
 
 
 def split_by_headings(markdown: str) -> list[str]:

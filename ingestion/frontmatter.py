@@ -17,6 +17,10 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
         key, sep, value = line.partition(":")
         if not sep:
             continue
-        meta[key.strip()] = value.strip().strip('"').strip("'")
+        value = value.strip().strip('"').strip("'")
+        # "null"/vacío significa "sin valor": no lo guardamos para que
+        # .get(key) devuelva None en vez del string literal "null".
+        if value and value.lower() != "null":
+            meta[key.strip()] = value
 
     return meta, body.strip()

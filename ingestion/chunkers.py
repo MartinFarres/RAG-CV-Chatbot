@@ -15,11 +15,17 @@ class IngestChunk:
     fuente_url: str | None
 
 
-def chunk_cv(text: str, nombre: str) -> list[IngestChunk]:
+def _chunk_by_headings(
+    text: str, tipo: str, nombre: str, fuente_url: str | None = None
+) -> list[IngestChunk]:
     return [
-        IngestChunk(content=section, tipo="cv", nombre=nombre, fuente_url=None)
+        IngestChunk(content=section, tipo=tipo, nombre=nombre, fuente_url=fuente_url)
         for section in split_by_headings(text)
     ]
+
+
+def chunk_cv(text: str, nombre: str) -> list[IngestChunk]:
+    return _chunk_by_headings(text, tipo="cv", nombre=nombre)
 
 
 def chunk_readme(text: str, nombre: str, fuente_url: str | None) -> list[IngestChunk]:
@@ -28,14 +34,9 @@ def chunk_readme(text: str, nombre: str, fuente_url: str | None) -> list[IngestC
         return []
 
     if len(text) <= SHORT_README_THRESHOLD:
-        sections = [text]
-    else:
-        sections = split_by_headings(text)
+        return [IngestChunk(content=text, tipo="proyecto", nombre=nombre, fuente_url=fuente_url)]
 
-    return [
-        IngestChunk(content=section, tipo="proyecto", nombre=nombre, fuente_url=fuente_url)
-        for section in sections
-    ]
+    return _chunk_by_headings(text, tipo="proyecto", nombre=nombre, fuente_url=fuente_url)
 
 
 def chunk_certificado(text: str, nombre: str, fuente_url: str | None) -> list[IngestChunk]:
@@ -46,32 +47,39 @@ def chunk_certificado(text: str, nombre: str, fuente_url: str | None) -> list[In
 
 
 def chunk_about_me(text: str, nombre: str) -> list[IngestChunk]:
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    return [
-        IngestChunk(content=paragraph, tipo="about_me", nombre=nombre, fuente_url=None)
-        for paragraph in paragraphs
-    ]
+    # El doc real está armado como preguntas en headings (## / ###), no
+    # como párrafos sueltos: partir por heading mantiene cada pregunta
+    # (o sub-área, ej. "Seguridad informática" dentro de "por qué este
+    # rubro") como una unidad temática autocontenida.
+    return _chunk_by_headings(text, tipo="about_me", nombre=nombre)
 
 
-def chunk_plan_estudio(materias: list[dict], nombre: str) -> list[IngestChunk]:
+def chunk_plan_estudio_resumen(text: str, nombre: str) -> list[IngestChunk]:
+    return _chunk_by_headings(text, tipo="plan_estudio", nombre=nombre)
+
+
+def chunk_plan_estudio_materias(rows: list[dict[str, str]]) -> list[IngestChunk]:
     chunks = []
 
-    for materia in materias:
-        lines = [f"Materia: {materia['nombre']}"]
-        if materia.get("area"):
-            lines.append(f"Área: {materia['area']}")
-        if materia.get("anio"):
-            lines.append(f"Año: {materia['anio']}")
-        if materia.get("estado"):
-            lines.append(f"Estado: {materia['estado']}")
-        if materia.get("nota") is not None:
-            lines.append(f"Nota: {materia['nota']}")
+    for row in rows:
+        lines = [
+            f"Materia: {row['materia']}",
+            f"Año de la carrera: {row['anio_carrera']}",
+            f"Sección: {row['seccion']}",
+            f"Estado: {row['estado']}",
+        ]
+        if row.get("tipo_aprobacion"):
+            lines.append(f"Forma de aprobación: {row['tipo_aprobacion']}")
+        if row.get("fecha"):
+            lines.append(f"Fecha: {row['fecha']}")
+        if row.get("calificacion"):
+            lines.append(f"Calificación: {row['calificacion']}")
 
         chunks.append(
             IngestChunk(
                 content="\n".join(lines),
                 tipo="plan_estudio",
-                nombre=materia["nombre"],
+                nombre=row["materia"],
                 fuente_url=None,
             )
         )

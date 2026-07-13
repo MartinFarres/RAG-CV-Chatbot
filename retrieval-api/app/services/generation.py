@@ -21,9 +21,12 @@ def build_prompt(
     chunks: list[ChunkResult],
     history: list[Message],  # últimos N turnos
 ) -> list[dict]:
-    contexto = "\n\n".join(
-        f"[Fuente: {chunk.nombre}]\n{chunk.content}" for chunk in chunks
-    )
+    def _fuente(chunk: ChunkResult) -> str:
+        if chunk.fuente_url:
+            return f"[Fuente: {chunk.nombre} — {chunk.fuente_url}]"
+        return f"[Fuente: {chunk.nombre}]"
+
+    contexto = "\n\n".join(f"{_fuente(chunk)}\n{chunk.content}" for chunk in chunks)
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend({"role": turn.role, "content": turn.content} for turn in history)
