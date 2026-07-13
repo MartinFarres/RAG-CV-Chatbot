@@ -6,3 +6,7 @@ class ChunkResult(BaseModel):
     nombre: str
     fuente_url: str | None
     distance: float
+
+class Message(BaseModel):
+    role: str
+    content: str

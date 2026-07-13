@@ -1,4 +1,4 @@
-from requests import Request
+from fastapi import Request
 from sentence_transformers import SentenceTransformer
 from app.core.db import async_session
 from sqlalchemy.ext.asyncio import AsyncSession

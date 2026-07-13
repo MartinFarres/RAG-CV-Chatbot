@@ -3,7 +3,7 @@ from sentence_transformers import SentenceTransformer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.models import Chunk
-from schemas import ChunkResult
+from app.services.schemas import ChunkResult
 
 async def retrieve_context(
     query: str,
@@ -11,26 +11,29 @@ async def retrieve_context(
     session: AsyncSession,
     top_k: int = 4,
 ) -> list[ChunkResult]:
-    query_embedding = await embed_query(query, model)
+    query_embedding = (await asyncio.to_thread(model.encode, query)).tolist() # embeddes query
 
-    # TODO: armar el select con order_by cosine_distance y limit top_k
-    # pista: Chunk.embedding.cosine_distance(query_embedding) te da la distancia
-    # como columna calculada, la podés pedir en el select para tenerla en el resultado
+    distance = Chunk.embedding.cosine_distance(query_embedding).label("distance") # chunk simillarity
+    stmt = (
+        select(Chunk.content, Chunk.tipo, Chunk.nombre, Chunk.fuente_url, distance)
+        .order_by(distance)
+        .limit(top_k)
+    )
 
-    # TODO: ejecutar con session.execute(stmt), iterar resultados
+    result = await session.execute(stmt)
 
-    # TODO: mapear cada fila a ChunkResult
+    result = [
+        ChunkResult(
+            content=row.content,
+            tipo=row.tipo,
+            nombre=row.nombre,
+            fuente_url=row.fuente_url,
+            distance=row.distance,
+        )
+        for row in result
+    ]
+
+    return [r for r in result if r.distance <= 0.4] # prevents weird responses to non scope questions
 
 
-async def embed_query(text: str, model: SentenceTransformer) -> list[float]:
-    embedding = await asyncio.to_thread(model.encode, text)
-    return embedding.tolist()
 
-async def search_similar_chunks(
-    query_embedding: list[float],
-    top_k: int = 4,
-    tipo_filtro: str | None = None
-) -> list[Chunk]:
-    # Query SQL a pgVector, operador de distancia coseno, ORDER BY + LIMIT
-    # WHERE tipo = tipo_filtro
-    return

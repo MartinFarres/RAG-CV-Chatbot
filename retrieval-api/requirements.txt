@@ -7,3 +7,4 @@ groq
 python-dotenv
 sentence_transformers
 pgvector
+groq
