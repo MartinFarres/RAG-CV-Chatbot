@@ -41,3 +41,8 @@ async def chat(
     await session.commit()
 
     return ChatResponse(response=answer, conversation_id=conversation_id)
+
+
+@router.get("/health")
+def get_health():
+    return {"status": "ok"} 

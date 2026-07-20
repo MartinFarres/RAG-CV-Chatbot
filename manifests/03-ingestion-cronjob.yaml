@@ -1,0 +1,50 @@
+# El Secret ingestion-secrets NO va committeado en este repo.
+# GITHUB_TOKEN es opcional (solo levanta el rate limit de la API de
+# GitHub al traer READMEs, ver ingestion/github_client.py). Si no se
+# crea este Secret, el CronJob corre igual sin él (ver "optional: true"
+# más abajo). Para crearlo:
+#
+#   kubectl create secret generic ingestion-secrets \
+#     --from-literal=GITHUB_TOKEN=<tu-github-token> \
+#     -n rag-chatbot
+#
+# Ver README.md > "Kubernetes Deployment" para el detalle completo.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingestion
+  namespace: rag-chatbot
+spec:
+  # Corre una vez por día a las 4am.
+  schedule: "0 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: ingestion
+              # Reemplazar por la imagen real en tu registry
+              image: martinfarres/rag-cv-ingestion:latest
+              envFrom:
+                - secretRef:
+                    name: retrieval-api-secrets
+                - secretRef:
+                    name: ingestion-secrets
+                    optional: true
+                - configMapRef:
+                    name: retrieval-api-config
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 512Mi
+                limits:
+                  cpu: 1
+                  memory: 2Gi
+---
+# Para correr ingestion manualmente sin esperar al schedule:
+# kubectl create job --from=cronjob/ingestion ingestion-manual-run -n rag-chatbot

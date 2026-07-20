@@ -20,6 +20,8 @@ A Retrieval-Augmented Generation chatbot that answers recruiter questions about 
   - [3. Retrieval API](#3-retrieval-api)
   - [4. Web Client](#4-web-client)
 - [Environment Variables](#environment-variables)
+- [Kubernetes Deployment](#kubernetes-deployment)
+  - [Cluster Architecture](#cluster-architecture)
 - [Common Commands](#common-commands)
 - [Design Decisions](#design-decisions)
 - [Known Limitations and Future Work](#known-limitations-and-future-work)
@@ -251,6 +253,108 @@ The client currently points at `http://localhost:8000/chat` (hardcoded in `src/h
 | `DATABASE_URL`        | yes      | Same database as `ingestion`                        |
 | `EMBEDDING_MODEL_NAME`| yes      | Must match `ingestion`'s value                       |
 
+## Kubernetes Deployment
+
+`manifests/` contains the manifests for a self-hosted deployment: a `rag-chatbot` namespace, a Postgres+pgvector `StatefulSet`, the `retrieval-api` `Deployment`, an `ingestion` `CronJob`, an nginx rate-limiting `proxy`, and a `cloudflared` tunnel exposing the proxy publicly. None of the Secret manifests are committed with real values — each one is created imperatively with `kubectl` before applying the rest, so no credential ever needs to live in this repo or its git history.
+
+### Cluster Architecture
+
+The target is a single-node [k3s](https://k3s.io/) cluster (e.g. a home server or a small VPS), not a managed multi-node cloud cluster — every design choice below follows from that:
+
+```
+Internet
+   │  (outbound-only connection, no open inbound ports / no public IP needed)
+   ▼
+┌─────────────────────────── Cloudflare edge ───────────────────────────┐
+│  martin-farres.site  ──────────────►  Cloudflare Tunnel               │
+└─────────────────────────────────────────────────────────────────────────┘
+                                          │
+                        namespace: rag-chatbot (k3s node)
+                                          ▼
+                              ┌────────────────────┐
+                              │ cloudflared          │  Deployment
+                              │ (tunnel client)      │  ClusterIP-only peers
+                              └──────────┬───────────┘
+                                         │ http://proxy:8080
+                                         ▼
+                              ┌────────────────────┐
+                              │ proxy (nginx)         │  Deployment, Service ClusterIP
+                              │ rate limit + /health  │
+                              └──────────┬───────────┘
+                                         │ http://retrieval-api:8000
+                                         ▼
+                              ┌────────────────────┐
+                              │ retrieval-api         │  Deployment, Service ClusterIP
+                              │ (FastAPI + embeddings)│  Secret + ConfigMap via envFrom
+                              └──────────┬───────────┘
+                                         │ postgresql+asyncpg://
+                                         ▼
+                              ┌────────────────────┐
+                              │ postgresql            │  StatefulSet, Service ClusterIP
+                              │ (pgvector)             │  PVC (local-path), Secret via envFrom
+                              └────────────────────┘
+                                         ▲
+                                         │ full re-sync (delete + insert)
+                              ┌────────────────────┐
+                              │ ingestion              │  CronJob, 04:00 daily
+                              │ (batch load→chunk→embed)│  Secret + ConfigMap via envFrom
+                              └────────────────────┘
+```
+
+- **No `LoadBalancer` Service or Ingress controller.** A single-node k3s box is typically behind NAT with no stable public IP, so instead of opening a port and pointing DNS at it, `cloudflared` holds an *outbound* connection to Cloudflare's edge and Cloudflare proxies `martin-farres.site` back through that tunnel. `05-cloudflare-tunnel.yaml`'s `ingress` rule is effectively this cluster's routing layer, playing the role an Ingress resource would play elsewhere.
+- **Everything behind the tunnel is `ClusterIP`.** `postgresql`, `retrieval-api`, and `proxy` are only reachable from inside the cluster — `cloudflared` is the sole pod with a path to the outside world, so a misconfiguration elsewhere can't accidentally expose the database or bypass rate limiting.
+- **The nginx `proxy` does the job an Ingress controller/annotations would normally do.** Since there's no Ingress controller in this topology, request-level concerns (per-IP rate limiting, connection capping, proxy timeouts tuned for LLM latency) live in `04-proxy.yaml`'s nginx config instead, sitting between the tunnel and `retrieval-api`.
+- **`local-path` storage class.** This is k3s's built-in default `local-path-provisioner` — it binds the `postgres-pvc` to a directory on the node's own disk. There is no replication or multi-node failover; the trade-off is acceptable here because this is a single-node deployment and the corpus is fully reproducible from `ingestion/sources/` by re-running the CronJob.
+- **`ingestion` is a `CronJob`, not a `Deployment`.** It's a batch job that fully re-syncs the `chunks` table once a day (and can be triggered manually, see the comment in `03-ingestion-cronjob.yaml`) rather than a long-running service, so it never needs a `Service` or to be reachable from anything else in the cluster.
+- **Resource `requests`/`limits` are sized for a small single node**, not for horizontal scaling — every workload runs at `replicas: 1`, since the whole point of this topology is running the full stack on one machine.
+
+Apply in order, creating each Secret right before the manifest that references it:
+
+```bash
+kubectl apply -f manifests/00-namespace.yaml
+
+# 1. postgres-credentials, used by 01-postgresql.yaml
+kubectl create secret generic postgres-credentials \
+  --from-literal=POSTGRES_USER=<usuario> \
+  --from-literal=POSTGRES_PASSWORD=<password> \
+  --from-literal=POSTGRES_DB=<nombre-db> \
+  -n rag-chatbot
+kubectl apply -f manifests/01-postgresql.yaml
+
+# 2. retrieval-api-secrets, used by 02-retrieval-api.yaml and 03-ingestion-cronjob.yaml
+#    DATABASE_URL must reuse the same user/password/db created above.
+kubectl create secret generic retrieval-api-secrets \
+  --from-literal=DATABASE_URL=postgresql+asyncpg://<usuario>:<password>@postgresql:5432/<nombre-db> \
+  --from-literal=GROQ_API_KEY=<tu-groq-api-key> \
+  -n rag-chatbot
+kubectl apply -f manifests/02-retrieval-api.yaml
+
+# 3. ingestion-secrets (optional), used by 03-ingestion-cronjob.yaml
+#    Only needed to raise the GitHub API rate limit when fetching READMEs live;
+#    the CronJob runs fine without it.
+kubectl create secret generic ingestion-secrets \
+  --from-literal=GITHUB_TOKEN=<tu-github-token> \
+  -n rag-chatbot
+kubectl apply -f manifests/03-ingestion-cronjob.yaml
+
+kubectl apply -f manifests/04-proxy.yaml
+
+# 4. tunnel-credentials, used by 05-cloudflare-tunnel.yaml
+#    Generated by `cloudflared tunnel create <name>` as a local JSON file.
+kubectl create secret generic tunnel-credentials \
+  --from-file=credentials.json=/path/to/<TUNNEL_ID>.json \
+  -n rag-chatbot
+kubectl apply -f manifests/05-cloudflare-tunnel.yaml
+```
+
+To rotate a credential later, delete and recreate the Secret, then roll the affected Deployment/CronJob so it picks up the new value (`envFrom` does not hot-reload):
+
+```bash
+kubectl delete secret retrieval-api-secrets -n rag-chatbot
+kubectl create secret generic retrieval-api-secrets --from-literal=... -n rag-chatbot
+kubectl rollout restart deployment/retrieval-api -n rag-chatbot
+```
+
 ## Common Commands
 
 | Task                              | Command                                                |
@@ -284,7 +388,6 @@ The client currently points at `http://localhost:8000/chat` (hardcoded in `src/h
 - There is no authentication, rate limiting, or abuse protection in front of `retrieval-api` beyond Groq's own `RateLimitError` handling.
 - No automated test suite exists for any of the three services yet.
 - `retrieval-api/app/models/models.py` is currently unused and can be removed once confirmed dead.
-- The `ingestion` Dockerfile is written to run as a one-off Job or scheduled CronJob; the actual Kubernetes manifests for that scheduling are not part of this repository.
 
 ## License
 

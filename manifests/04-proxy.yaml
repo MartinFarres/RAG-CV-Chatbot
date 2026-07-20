@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxy-nginx-config
+  namespace: rag-chatbot
+data:
+  nginx.conf: |
+    worker_processes auto;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      # Zona de rate limit: 10 requests/minuto por IP, con burst de 5
+      limit_req_zone $binary_remote_addr zone=chatbot_limit:10m rate=10r/m;
+
+      # Limita conexiones concurrentes por IP
+      limit_conn_zone $binary_remote_addr zone=chatbot_conn:10m;
+
+      server {
+        listen 8080;
+
+        location / {
+          limit_req zone=chatbot_limit burst=5 nodelay;
+          limit_conn chatbot_conn 5;
+          limit_req_status 429;
+          limit_conn_status 429;
+
+          proxy_pass http://retrieval-api:8000;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+          # Timeouts razonables para respuestas de LLM (Groq es rápido, pero por las dudas)
+          proxy_connect_timeout 10s;
+          proxy_send_timeout 30s;
+          proxy_read_timeout 30s;
+        }
+
+        location /health {
+          # Bypass del rate limit para el healthcheck interno del proxy mismo
+          proxy_pass http://retrieval-api:8000/health;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy
+  namespace: rag-chatbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proxy
+  template:
+    metadata:
+      labels:
+        app: proxy
+    spec:
+      containers:
+        - name: proxy
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: proxy-nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy
+  namespace: rag-chatbot
+spec:
+  selector:
+    app: proxy
+  ports:
+    - port: 8080
+      targetPort: 8080
+  # ClusterIP: el único que le va a hablar es el Cloudflare Tunnel
+  type: ClusterIP

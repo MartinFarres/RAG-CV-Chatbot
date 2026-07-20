@@ -5,8 +5,6 @@ from app.services.schemas import ChunkResult, Message
 
 client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
-
 SYSTEM_PROMPT = """Sos un asistente que responde preguntas de reclutadores sobre el perfil profesional de Martín Farrés.
 
 Reglas:
@@ -40,7 +38,7 @@ def build_prompt(
 async def generate_response(messages: list[dict]) -> str:
     try:
         completion = await client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=settings.LLM_MODEL,
             messages=messages,
         )
     except RateLimitError:

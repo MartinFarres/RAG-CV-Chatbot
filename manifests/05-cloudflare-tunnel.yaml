@@ -1,0 +1,66 @@
+# El Secret con las credenciales del tunnel NO va en este archivo.
+# Se crea directo desde el JSON que genera `cloudflared tunnel create`, así:
+#
+#   kubectl create secret generic tunnel-credentials \
+#     --from-file=credentials.json=/ruta/al/<TUNNEL_ID>.json \
+#     -n rag-chatbot
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tunnel-config
+  namespace: rag-chatbot
+data:
+  config.yml: |
+    tunnel: fc0ff06d-1400-4ea8-9c0b-33498e93c7a2
+    credentials-file: /etc/cloudflared/creds/credentials.json
+
+    ingress:
+      - hostname: martin-farres.site
+        service: http://proxy:8080
+      - service: http_status:404
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: rag-chatbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:latest
+          args:
+            - tunnel
+            - --config
+            - /etc/cloudflared/config.yml
+            - run
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared
+              readOnly: true
+            - name: creds
+              mountPath: /etc/cloudflared/creds
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: tunnel-config
+        - name: creds
+          secret:
+            secretName: tunnel-credentials
