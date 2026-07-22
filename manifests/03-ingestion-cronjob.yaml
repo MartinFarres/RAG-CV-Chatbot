@@ -30,7 +30,7 @@ spec:
             - name: ingestion
               # Reemplazar por la imagen real en tu registry
               image: rag-cv-ingestion:local
-              imagePullPolicy: never
+              imagePullPolicy: Never
               envFrom:
                 - secretRef:
                     name: retrieval-api-secrets
