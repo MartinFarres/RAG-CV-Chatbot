@@ -29,7 +29,8 @@ spec:
           containers:
             - name: ingestion
               # Reemplazar por la imagen real en tu registry
-              image: martinfarres/rag-cv-ingestion:latest
+              image: rag-cv-ingestion:local
+              imagePullPolicy: never
               envFrom:
                 - secretRef:
                     name: retrieval-api-secrets
